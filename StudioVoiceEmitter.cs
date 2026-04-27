@@ -8,39 +8,38 @@ using UnityEngine;
 
 namespace ProximityChat
 {
-    /// <summary>
-    /// Plays 16-bit PCM voice audio through a user-defined Programmer Instrument Event in FMOD Studio.
-    /// </summary>
     public class StudioVoiceEmitter : VoiceEmitter
     {
+        private const float MaxWaitSeconds = 5f;
+
         [Header("FMOD Programmer Instrument Event Reference")]
         [SerializeField] protected EventReference _voiceEventReference;
-        // Programmer instrument event
+
         protected EVENT_CALLBACK _voiceCallback;
         protected EventInstance _voiceEventInstance;
         protected float _volume = 1f;
         protected float _occlusion = 0f;
 
-        /// <inheritdoc />
+        private GCHandle _soundHandle;
+
         public override void Init(uint sampleRate = 48000, int channelCount = 1, VoiceFormat inputFormat = VoiceFormat.PCM16Samples)
         {
             base.Init(sampleRate, channelCount, inputFormat);
-            // Wireup programmer instrument callback
-            _voiceCallback = new EVENT_CALLBACK(VoiceEventCallback);
-            // Create and initialize an instance of our FMOD voice event
+            _initialized = false;
+
+            _soundHandle = GCHandle.Alloc(_voiceSound);
+            _voiceCallback = VoiceEventCallback;
+
             _voiceEventInstance = RuntimeManager.CreateInstance(_voiceEventReference);
+            _voiceEventInstance.setUserData(GCHandle.ToIntPtr(_soundHandle));
             _voiceEventInstance.setCallback(_voiceCallback);
             _voiceEventInstance.start();
             _voiceEventInstance.setPaused(true);
-            // We're not going to be officially initialized until our event instance
-            // is created, which takes a little while, so let's re-flag ourself as uninitialized
-            _initialized = false;
-            StartCoroutine(WaitToGetChannel());
-            // Attach it to this to get spatial audio
+
             RuntimeManager.AttachInstanceToGameObject(_voiceEventInstance, gameObject, true);
+            StartCoroutine(WaitToGetChannel());
         }
-        
-        /// <inheritdoc />
+
         public override void SetVolume(float volume)
         {
             _volume = volume;
@@ -60,52 +59,57 @@ namespace ProximityChat
 
         private IEnumerator WaitToGetChannel()
         {
-            // Wait until event is fully created (playback state == playing)
-            while (true)
+            float elapsed = 0f;
+            while (elapsed < MaxWaitSeconds)
             {
                 yield return null;
-                _voiceEventInstance.getPlaybackState(out PLAYBACK_STATE playbackState);
-                if (playbackState == PLAYBACK_STATE.PLAYING)
-                    break;
+                elapsed += Time.unscaledDeltaTime;
+                _voiceEventInstance.getPlaybackState(out PLAYBACK_STATE state);
+                if (state == PLAYBACK_STATE.PLAYING) break;
             }
-            
-            // Get the channel and initialize
+
+            if (elapsed >= MaxWaitSeconds)
+            {
+                yield break;
+            }
+
             if (FMODUtilities.TryGetChannelForEvent(_voiceEventInstance, out Channel channel))
             {
                 _channel = channel;
                 _initialized = true;
             }
-            else
-            {
-                UnityEngine.Debug.LogError("Failed to find channel. Unable to initialize Studio voice emitter.");
-            }
         }
 
         [AOT.MonoPInvokeCallback(typeof(EVENT_CALLBACK))]
-        static RESULT VoiceEventCallback(EVENT_CALLBACK_TYPE type, IntPtr instancePtr, IntPtr parameterPtr)
+        private static RESULT VoiceEventCallback(EVENT_CALLBACK_TYPE type, IntPtr instancePtr, IntPtr parameterPtr)
         {
-            switch (type)
-            {
-                // Pass the sound to the programmer instrument
-                case EVENT_CALLBACK_TYPE.CREATE_PROGRAMMER_SOUND:
-                {
-                    var parameter = (PROGRAMMER_SOUND_PROPERTIES)Marshal.PtrToStructure(parameterPtr, typeof(PROGRAMMER_SOUND_PROPERTIES));
-                    parameter.sound = _voiceSound.handle;
-                    parameter.subsoundIndex = -1;
-                    Marshal.StructureToPtr(parameter, parameterPtr, false);
-                    break;
-                }
-            }
+            if (type != EVENT_CALLBACK_TYPE.CREATE_PROGRAMMER_SOUND) return RESULT.OK;
+
+            var instance = new EventInstance { handle = instancePtr };
+            instance.getUserData(out IntPtr userDataPtr);
+            if (userDataPtr == IntPtr.Zero) return RESULT.OK;
+
+            var handle = GCHandle.FromIntPtr(userDataPtr);
+            if (!handle.IsAllocated) return RESULT.OK;
+
+            var sound = (Sound)handle.Target;
+            var param = (PROGRAMMER_SOUND_PROPERTIES)Marshal.PtrToStructure(parameterPtr, typeof(PROGRAMMER_SOUND_PROPERTIES));
+            param.sound = sound.handle;
+            param.subsoundIndex = -1;
+            Marshal.StructureToPtr(param, parameterPtr, false);
+
             return RESULT.OK;
         }
 
-        private void OnDestroy()
+        protected override void OnDestroy()
         {
-            if (_initialized)
-            {
-                _voiceSound.release();
+            if (_soundHandle.IsAllocated)
+                _soundHandle.Free();
+
+            if (_voiceEventInstance.isValid())
                 _voiceEventInstance.release();
-            }
+
+            base.OnDestroy();
         }
     }
 }

@@ -3,27 +3,30 @@ using Concentus.Structs;
 
 namespace ProximityChat
 {
-    public class VoiceDecoder
+    public sealed class VoiceDecoder : IDisposable
     {
-        private OpusDecoder _opusDecoder;
-        private short[] _decodeBuffer;
+        private readonly OpusDecoder _opusDecoder;
+        private readonly short[] _decodeBuffer;
+        private bool _disposed;
 
         public VoiceDecoder()
         {
             _opusDecoder = new OpusDecoder(VoiceConsts.OpusSampleRate, 1);
-            _decodeBuffer = new short[2880];
+            _decodeBuffer = new short[VoiceConsts.MaxOpusFrameSize];
         }
 
-        public Span<short> DecodeVoiceSamples(Span<byte> encodedVoiceData)
+        public Span<short> DecodeVoiceSamples(Span<byte> encodedData)
         {
-            int frameSize = OpusPacketInfo.GetNumSamples(encodedVoiceData, 0, encodedVoiceData.Length, _opusDecoder.SampleRate);
-            int decodedSize = _opusDecoder.Decode(encodedVoiceData, _decodeBuffer, frameSize);
-            return _decodeBuffer.AsSpan(0, decodedSize);
+            int frameSize = OpusPacketInfo.GetNumSamples(encodedData, 0, encodedData.Length, _opusDecoder.SampleRate);
+            int decodedCount = _opusDecoder.Decode(encodedData, _decodeBuffer, frameSize);
+            return _decodeBuffer.AsSpan(0, decodedCount);
         }
 
-        public Span<short> DecodeVoiceSamples(byte[] encodedVoiceData)
+        public void Dispose()
         {
-            return DecodeVoiceSamples(encodedVoiceData.AsSpan());
+            if (_disposed) return;
+            _opusDecoder.Dispose();
+            _disposed = true;
         }
     }
 }

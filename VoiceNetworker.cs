@@ -1,13 +1,10 @@
+using System;
+using System.Buffers;
 using Mirror;
 using ProximityChat;
-using System;
 using UnityEngine;
 
-public enum VoiceChatMode
-{
-    PushToTalk,
-    Toggle
-}
+public enum VoiceChatMode { PushToTalk, Toggle }
 
 public class VoiceNetworker : NetworkBehaviour
 {
@@ -21,12 +18,10 @@ public class VoiceNetworker : NetworkBehaviour
     private VoiceEmitter _voiceEmitter;
     private VoiceEncoder _voiceEncoder;
     private VoiceDecoder _voiceDecoder;
-    private VoiceDecoder _monitorDecoder;
 
     private bool _isActive;
     private bool _prevInput;
     private bool _playbackOwnVoice;
-
     private float _currentVoiceLevel;
     private float _peakVoiceLevel;
     private float _peakHoldTimer;
@@ -63,7 +58,6 @@ public class VoiceNetworker : NetworkBehaviour
             _voiceRecorder.Init();
             _voiceEncoder = new VoiceEncoder(_voiceRecorder.RecordedSamplesQueue);
             _voiceDecoder = new VoiceDecoder();
-            _monitorDecoder = new VoiceDecoder();
             _voiceEmitter.Init(VoiceConsts.OpusSampleRate);
             _voiceEmitter.enabled = _playbackOwnVoice;
         }
@@ -81,55 +75,35 @@ public class VoiceNetworker : NetworkBehaviour
 
     private void OnEnable()
     {
-        if (SettingsManager.Instance == null)
-        {
-            Debug.LogWarning("SettingsManager not initialized!");
-            return;
-        }
-        SettingsManager.Instance.OnMicrophoneModeChanged += ChangeSavedMicMode;
-        SettingsManager.Instance.OnMicrophoneDeviceChanged += ChangeSavedMicDevice;
+        if (!TryGetSettings(out SettingsManager sm)) return;
+        sm.OnMicrophoneModeChanged += ChangeSavedMicMode;
+        sm.OnMicrophoneDeviceChanged += ChangeSavedMicDevice;
     }
 
     private void OnDisable()
     {
-        if (SettingsManager.Instance == null)
-        {
-            Debug.LogWarning("SettingsManager not initialized!");
-            return;
-        }
-        SettingsManager.Instance.OnMicrophoneModeChanged -= ChangeSavedMicMode;
-        SettingsManager.Instance.OnMicrophoneDeviceChanged -= ChangeSavedMicDevice;
+        if (!TryGetSettings(out SettingsManager sm)) return;
+        sm.OnMicrophoneModeChanged -= ChangeSavedMicMode;
+        sm.OnMicrophoneDeviceChanged -= ChangeSavedMicDevice;
+    }
+
+    private bool TryGetSettings(out SettingsManager sm)
+    {
+        sm = SettingsManager.Instance;
+        if (sm == null) Debug.LogWarning("SettingsManager not initialized!");
+        return sm != null;
     }
 
     private void ChangeSavedMicMode()
     {
-        SettingsManager settingsManager = SettingsManager.Instance;
-        if (settingsManager == null)
-        {
-            Debug.LogWarning("SettingsManager not initialized!");
-            return;
-        }
-
-        switch (settingsManager.MicrophoneMode)
-        {
-            case "PushToTalk":
-                SetVoiceChatMode(VoiceChatMode.PushToTalk);
-                break;
-            case "Toggle":
-                SetVoiceChatMode(VoiceChatMode.Toggle);
-                break;
-        }
+        if (!TryGetSettings(out SettingsManager sm)) return;
+        SetVoiceChatMode(sm.MicrophoneMode == "Toggle" ? VoiceChatMode.Toggle : VoiceChatMode.PushToTalk);
     }
 
     private void ChangeSavedMicDevice()
     {
-        SettingsManager settingsManager = SettingsManager.Instance;
-        if (settingsManager == null)
-        {
-            Debug.LogWarning("SettingsManager not initialized!");
-            return;
-        }
-        SetVoiceChatDevice(settingsManager.MicrophoneDeviceIndex);
+        if (!TryGetSettings(out SettingsManager sm)) return;
+        SetVoiceChatDevice(sm.MicrophoneDeviceIndex);
     }
 
     private void Update()
@@ -143,24 +117,15 @@ public class VoiceNetworker : NetworkBehaviour
         switch (_voiceChatMode)
         {
             case VoiceChatMode.PushToTalk:
-                if (justPressed)
-                {
-                    _isActive = true;
-                    StartRecording();
-                }
-                else if (justReleased)
-                {
-                    _isActive = false;
-                    StopRecording();
-                }
+                if (justPressed) { _isActive = true; StartRecording(); }
+                else if (justReleased) { _isActive = false; StopRecording(); }
                 break;
 
             case VoiceChatMode.Toggle:
                 if (justPressed)
                 {
                     _isActive = !_isActive;
-                    if (_isActive) StartRecording();
-                    else StopRecording();
+                    if (_isActive) StartRecording(); else StopRecording();
                 }
                 break;
         }
@@ -171,27 +136,17 @@ public class VoiceNetworker : NetworkBehaviour
     public void SetVoiceChatDevice(int index)
     {
         if (_voiceRecorder.DriverIndex == index) return;
-
-        if (_isActive)
-        {
-            _isActive = false;
-            StopRecording();
-        }
-
+        if (_isActive) { _isActive = false; StopRecording(); }
         _voiceRecorder.ChangeRecordingIndex(index);
-        Debug.Log($"Microphone device index: {index}");
+#if UNITY_EDITOR
+        Debug.Log($"Microphone device index changed: {index}");
+#endif
     }
 
     public void SetVoiceChatMode(VoiceChatMode newMode)
     {
         if (_voiceChatMode == newMode) return;
-
-        if (_isActive)
-        {
-            _isActive = false;
-            StopRecording();
-        }
-
+        if (_isActive) { _isActive = false; StopRecording(); }
         _voiceChatMode = newMode;
     }
 
@@ -212,15 +167,13 @@ public class VoiceNetworker : NetworkBehaviour
     public void SendEncodedVoiceClientRpc(byte[] encodedVoiceData)
     {
         if (isLocalPlayer && !_playbackOwnVoice) return;
-
         if (_voiceDecoder == null)
         {
-            Debug.LogWarning("VoiceDecoder not initialized on this client.");
+            Debug.LogWarning("VoiceDecoder not initialized.");
             return;
         }
-
-        Span<short> decodedVoiceSamples = _voiceDecoder.DecodeVoiceSamples(encodedVoiceData);
-        _voiceEmitter.EnqueueSamplesForPlayback(decodedVoiceSamples);
+        Span<short> decoded = _voiceDecoder.DecodeVoiceSamples(encodedVoiceData.AsSpan());
+        _voiceEmitter.EnqueueSamplesForPlayback(decoded);
     }
 
     public void StartRecording()
@@ -235,61 +188,55 @@ public class VoiceNetworker : NetworkBehaviour
         _voiceRecorder.StopRecording();
     }
 
-    public void SetOutputVolume(float volume)
-    {
-        _voiceEmitter.SetVolume(volume);
-    }
-
-    public void SetOcclusionValue(float value)
-    {
-        _voiceEmitter.SetOcclusion(value);
-    }
+    public void SetOutputVolume(float volume) => _voiceEmitter.SetVolume(volume);
+    public void SetOcclusionValue(float value) => _voiceEmitter.SetOcclusion(value);
 
     private void LateUpdate()
     {
         if (!isLocalPlayer) return;
 
-        bool hadVoiceThisFrame = false;
+        bool hadVoice = false;
 
         if (_voiceEncoder.HasVoiceLeftToEncode)
         {
-            Span<byte> encodedVoice = _voiceEncoder.GetEncodedVoice();
-            byte[] encodedArray = encodedVoice.ToArray();
-            UpdateVoiceLevel(encodedArray);
-            hadVoiceThisFrame = true;
-            SendEncodedVoiceServerRpc(encodedArray);
+            SendVoiceFrame(_voiceEncoder.GetEncodedVoice());
+            hadVoice = true;
         }
 
         if (!_voiceRecorder.IsRecording && !_voiceEncoder.QueueIsEmpty)
         {
-            Span<byte> encodedVoice = _voiceEncoder.GetEncodedVoice(true);
-            byte[] encodedArray = encodedVoice.ToArray();
-            UpdateVoiceLevel(encodedArray);
-            hadVoiceThisFrame = true;
-            SendEncodedVoiceServerRpc(encodedArray);
+            SendVoiceFrame(_voiceEncoder.GetEncodedVoice(true));
+            hadVoice = true;
         }
 
-        if (!hadVoiceThisFrame)
-        {
-            DecayVoiceLevel();
-        }
+        if (!hadVoice) DecayVoiceLevel();
     }
 
-    private void UpdateVoiceLevel(byte[] encodedData)
+    private void SendVoiceFrame(Span<byte> encodedVoice)
     {
-        if (_monitorDecoder == null) return;
+        if (encodedVoice.IsEmpty) return;
 
-        Span<short> samples = _monitorDecoder.DecodeVoiceSamples(encodedData);
-        if (samples.Length == 0) return;
+        byte[] rented = ArrayPool<byte>.Shared.Rent(encodedVoice.Length);
+        encodedVoice.CopyTo(rented);
 
+        UpdateVoiceLevel(rented, encodedVoice.Length);
+        SendEncodedVoiceServerRpc(encodedVoice.ToArray());
+
+        ArrayPool<byte>.Shared.Return(rented);
+    }
+
+    private void UpdateVoiceLevel(byte[] encodedData, int length)
+    {
         float sumSquares = 0f;
-        for (int i = 0; i < samples.Length; i++)
+        for (int i = 0; i < length - 1; i += 2)
         {
-            float normalized = samples[i] / 32768f;
+            short sample = (short)(encodedData[i] | (encodedData[i + 1] << 8));
+            float normalized = sample / 32768f;
             sumSquares += normalized * normalized;
         }
 
-        float rms = Mathf.Sqrt(sumSquares / samples.Length);
+        int sampleCount = length / 2;
+        float rms = sampleCount > 0 ? Mathf.Sqrt(sumSquares / sampleCount) : 0f;
         float targetLevel = Mathf.Clamp01(rms * _meterSensitivity);
 
         float smoothSpeed = targetLevel > _currentVoiceLevel ? LevelSmoothUp : LevelSmoothDown;
@@ -304,9 +251,7 @@ public class VoiceNetworker : NetworkBehaviour
         {
             _peakHoldTimer -= Time.deltaTime;
             if (_peakHoldTimer <= 0f)
-            {
                 _peakVoiceLevel = Mathf.MoveTowards(_peakVoiceLevel, 0f, PeakDecayRate * Time.deltaTime);
-            }
         }
     }
 
@@ -314,13 +259,15 @@ public class VoiceNetworker : NetworkBehaviour
     {
         _currentVoiceLevel = Mathf.Lerp(_currentVoiceLevel, 0f, Time.deltaTime * LevelSmoothDown);
         _peakHoldTimer -= Time.deltaTime;
-
         if (_peakHoldTimer <= 0f)
-        {
             _peakVoiceLevel = Mathf.MoveTowards(_peakVoiceLevel, 0f, PeakDecayRate * Time.deltaTime);
-        }
-
         if (_currentVoiceLevel < 0.001f) _currentVoiceLevel = 0f;
         if (_peakVoiceLevel < 0.001f) _peakVoiceLevel = 0f;
+    }
+
+    private void OnDestroy()
+    {
+        _voiceEncoder?.Dispose();
+        _voiceDecoder?.Dispose();
     }
 }

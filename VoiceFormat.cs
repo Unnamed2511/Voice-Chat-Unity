@@ -2,7 +2,7 @@ namespace ProximityChat
 {
     public enum VoiceFormat
     {
-        PCM16Bytes = 1,   // byte[]
-        PCM16Samples = 2  // short[]
+        PCM16Bytes = 1,
+        PCM16Samples = 2,
     }
 }

@@ -14,14 +14,17 @@ namespace ProximityChat
         protected uint _sampleRate;
         protected int _channelCount;
         protected Channel _channel;
-        protected VoiceDataQueue _voiceBytesQueue;
-        protected VoiceDataQueue _voiceSamplesQueue;
+
+        protected VoiceDataQueue<byte> _voiceBytesQueue;
+        protected VoiceDataQueue<short> _voiceSamplesQueue;
+
         protected byte[] _emptyBytes;
         protected uint _writePosition;
         protected uint _availablePlaybackByteCount;
         protected uint _prevPlaybackPosition;
         protected bool _soundIsFull;
-        protected bool _initialized = false;
+        protected bool _initialized;
+        private bool _soundReleased;
 
         public virtual void Init(uint sampleRate = 48000, int channelCount = 1, VoiceFormat inputFormat = VoiceFormat.PCM16Samples)
         {
@@ -38,34 +41,31 @@ namespace ProximityChat
             _emptyBytes = new byte[_soundParams.length];
 
             if (_inputFormat == VoiceFormat.PCM16Bytes)
-            {
-                _voiceBytesQueue = new VoiceDataQueue<byte>(_soundParams.length);
-            }
+                _voiceBytesQueue = new VoiceDataQueue<byte>((int)_soundParams.length);
             else
-            {
-                _voiceSamplesQueue = new VoiceDataQueue<short>(_soundParams.length / VoiceConsts.SampleSize);
-            }
+                _voiceSamplesQueue = new VoiceDataQueue<short>((int)(_soundParams.length / VoiceConsts.SampleSize));
 
             RuntimeManager.CoreSystem.createSound(
-                _soundParams.userdata,
+                string.Empty,
                 MODE.LOOP_NORMAL | MODE.OPENUSER | MODE._3D,
                 ref _soundParams,
                 out _voiceSound);
 
+            _prevPlaybackPosition = 0;
             _initialized = true;
         }
 
         public void EnqueueBytesForPlayback(Span<byte> voiceBytes)
         {
             if (_inputFormat != VoiceFormat.PCM16Bytes)
-                throw new Exception("Incorrect input format. Failed to enqueue voice bytes.");
+                throw new InvalidOperationException("Incorrect input format. Expected PCM16Bytes.");
             _voiceBytesQueue.Enqueue(voiceBytes);
         }
 
         public void EnqueueSamplesForPlayback(Span<short> voiceSamples)
         {
             if (_inputFormat != VoiceFormat.PCM16Samples)
-                throw new Exception("Incorrect input format. Failed to dequeue voice bytes.");
+                throw new InvalidOperationException("Incorrect input format. Expected PCM16Samples.");
             _voiceSamplesQueue.Enqueue(voiceSamples);
         }
 
@@ -74,62 +74,46 @@ namespace ProximityChat
 
         protected void WriteVoiceBytes(byte[] voiceBytes, uint writePosition, uint byteCount)
         {
-            if (byteCount <= 0) return;
-
+            if (byteCount == 0) return;
             _voiceSound.@lock(writePosition, byteCount, out IntPtr ptr1, out IntPtr ptr2, out uint len1, out uint len2);
-
-            if (len1 > 0)
-                Marshal.Copy(voiceBytes, 0, ptr1, (int)len1);
-            if (len2 > 0)
-                Marshal.Copy(voiceBytes, (int)len1, ptr2, (int)len2);
-
+            if (len1 > 0) Marshal.Copy(voiceBytes, 0, ptr1, (int)len1);
+            if (len2 > 0) Marshal.Copy(voiceBytes, (int)len1, ptr2, (int)len2);
             _voiceSound.unlock(ptr1, ptr2, len1, len2);
         }
 
         protected void WriteVoiceSamples(short[] voiceSamples, uint writePosition, uint sampleCount)
         {
-            if (sampleCount <= 0) return;
-
-            _voiceSound.@lock(writePosition, sampleCount * VoiceConsts.SampleSize, out IntPtr ptr1, out IntPtr ptr2, out uint len1, out uint len2);
-
-            uint samplesInPtr1 = len1 / VoiceConsts.SampleSize;
-            uint samplesInPtr2 = len2 / VoiceConsts.SampleSize;
-
-            if (samplesInPtr1 > 0)
-                Marshal.Copy(voiceSamples, 0, ptr1, (int)samplesInPtr1);
-            if (samplesInPtr2 > 0)
-                Marshal.Copy(voiceSamples, (int)samplesInPtr1, ptr2, (int)samplesInPtr2);
-
+            if (sampleCount == 0) return;
+            uint byteCount = sampleCount * VoiceConsts.SampleSize;
+            _voiceSound.@lock(writePosition, byteCount, out IntPtr ptr1, out IntPtr ptr2, out uint len1, out uint len2);
+            int samplesInPtr1 = (int)(len1 / VoiceConsts.SampleSize);
+            int samplesInPtr2 = (int)(len2 / VoiceConsts.SampleSize);
+            if (samplesInPtr1 > 0) Marshal.Copy(voiceSamples, 0, ptr1, samplesInPtr1);
+            if (samplesInPtr2 > 0) Marshal.Copy(voiceSamples, samplesInPtr1, ptr2, samplesInPtr2);
             _voiceSound.unlock(ptr1, ptr2, len1, len2);
         }
 
         protected abstract void SetPaused(bool isPaused);
 
-        protected uint GetPlayedByteCount(uint playbackStartPosition, uint playbackEndPosition)
+        protected uint GetPlayedByteCount(uint startPos, uint endPos)
         {
-            return playbackEndPosition >= playbackStartPosition
-                ? playbackEndPosition - playbackStartPosition
-                : _soundParams.length - playbackStartPosition + playbackEndPosition;
+            return endPos >= startPos
+                ? endPos - startPos
+                : _soundParams.length - startPos + endPos;
         }
 
-        protected uint GetAvailablePlaybackByteCount(uint playbackPosition, uint writePosition, bool soundIsFull = false)
+        protected uint GetAvailablePlaybackByteCount(uint playbackPos, uint writePos, bool soundIsFull = false)
         {
-            if (writePosition > playbackPosition)
-                return writePosition - playbackPosition;
-            else if (writePosition < playbackPosition)
-                return _soundParams.length - playbackPosition + writePosition;
-            else
-                return soundIsFull ? _soundParams.length : 0;
+            if (writePos > playbackPos) return writePos - playbackPos;
+            if (writePos < playbackPos) return _soundParams.length - playbackPos + writePos;
+            return soundIsFull ? 0 : _soundParams.length;
         }
 
-        protected uint GetAvailableWriteByteCount(uint playbackPosition, uint writePosition, bool soundIsFull = false)
+        protected uint GetAvailableWriteByteCount(uint playbackPos, uint writePos, bool soundIsFull = false)
         {
-            if (writePosition < playbackPosition)
-                return playbackPosition - writePosition;
-            else if (writePosition > playbackPosition)
-                return _soundParams.length - writePosition + playbackPosition;
-            else
-                return soundIsFull ? 0 : _soundParams.length;
+            if (writePos < playbackPos) return playbackPos - writePos;
+            if (writePos > playbackPos) return _soundParams.length - writePos + playbackPos;
+            return soundIsFull ? 0 : _soundParams.length;
         }
 
         protected virtual void Update()
@@ -138,22 +122,21 @@ namespace ProximityChat
 
             _channel.getPosition(out uint playbackPosition, TIMEUNIT.PCMBYTES);
 
-            uint bytesPlayedSinceLastFrame = GetPlayedByteCount(_prevPlaybackPosition, playbackPosition);
+            uint bytesPlayed = GetPlayedByteCount(_prevPlaybackPosition, playbackPosition);
 
-            if (_availablePlaybackByteCount > 0 && bytesPlayedSinceLastFrame > _availablePlaybackByteCount)
-            {
+            if (_availablePlaybackByteCount > 0 && bytesPlayed > _availablePlaybackByteCount)
                 _writePosition = playbackPosition;
-            }
 
-            if (bytesPlayedSinceLastFrame > 0)
-            {
-                WriteVoiceBytes(_emptyBytes, _prevPlaybackPosition, bytesPlayedSinceLastFrame);
-            }
+            if (bytesPlayed > 0)
+                WriteVoiceBytes(_emptyBytes, _prevPlaybackPosition, bytesPlayed);
 
-            uint availableWriteByteCount = GetAvailableWriteByteCount(playbackPosition, _writePosition, _soundIsFull);
-            uint writeLength = (_inputFormat == VoiceFormat.PCM16Bytes)
-                ? (uint)Mathf.Min(_voiceBytesQueue.EnqueuePosition, availableWriteByteCount)
-                : (uint)Mathf.Min(_voiceSamplesQueue.EnqueuePosition, availableWriteByteCount / VoiceConsts.SampleSize);
+            uint availableWrite = GetAvailableWriteByteCount(playbackPosition, _writePosition, _soundIsFull);
+
+            uint writeLength;
+            if (_inputFormat == VoiceFormat.PCM16Bytes)
+                writeLength = (uint)Mathf.Min(_voiceBytesQueue.EnqueuePosition, availableWrite);
+            else
+                writeLength = (uint)Mathf.Min(_voiceSamplesQueue.EnqueuePosition, availableWrite / VoiceConsts.SampleSize);
 
             if (writeLength > 0)
             {
@@ -168,11 +151,11 @@ namespace ProximityChat
                     _voiceSamplesQueue.Dequeue((int)writeLength);
                 }
 
-                uint writeLengthBytes = (_inputFormat == VoiceFormat.PCM16Bytes)
+                uint writtenBytes = (_inputFormat == VoiceFormat.PCM16Bytes)
                     ? writeLength
                     : writeLength * VoiceConsts.SampleSize;
 
-                _writePosition = (uint)Mathf.Repeat(_writePosition + writeLengthBytes, _soundParams.length);
+                _writePosition = (_writePosition + writtenBytes) % _soundParams.length;
                 _soundIsFull = _writePosition == playbackPosition;
             }
 
@@ -183,9 +166,10 @@ namespace ProximityChat
 
         protected virtual void OnDestroy()
         {
-            if (_initialized)
+            if (_initialized && !_soundReleased)
             {
                 _voiceSound.release();
+                _soundReleased = true;
             }
         }
     }

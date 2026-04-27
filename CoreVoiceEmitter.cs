@@ -12,6 +12,7 @@ namespace ProximityChat
         public override void Init(uint sampleRate = 48000, int channelCount = 1, VoiceFormat inputFormat = VoiceFormat.PCM16Samples)
         {
             base.Init(sampleRate, channelCount, inputFormat);
+            _prevPosition = transform.position;
             RuntimeManager.CoreSystem.playSound(_voiceSound, _channelGroup, true, out _channel);
         }
 
@@ -20,9 +21,7 @@ namespace ProximityChat
             _channel.setVolume(volume);
         }
 
-        public override void SetOcclusion(float value)
-        {
-        }
+        public override void SetOcclusion(float value) { }
 
         protected override void SetPaused(bool isPaused)
         {
@@ -36,9 +35,12 @@ namespace ProximityChat
             base.Update();
 
             Vector3 position = transform.position;
-            Vector3 velocity = (position - _prevPosition) / Time.deltaTime;
-            ATTRIBUTES_3D attributes3D = RuntimeUtils.To3DAttributes(transform, velocity);
-            _channel.set3DAttributes(ref attributes3D.position, ref attributes3D.velocity);
+            Vector3 velocity = Time.deltaTime > 0f
+                ? (position - _prevPosition) / Time.deltaTime
+                : Vector3.zero;
+
+            ATTRIBUTES_3D attributes = RuntimeUtils.To3DAttributes(transform, velocity);
+            _channel.set3DAttributes(ref attributes.position, ref attributes.velocity);
             _prevPosition = position;
         }
     }
