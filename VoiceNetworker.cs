@@ -2,15 +2,18 @@ using Mirror;
 using ProximityChat;
 using System;
 using UnityEngine;
+
 public enum VoiceChatMode
 {
     PushToTalk,
     Toggle
 }
+
 public class VoiceNetworker : NetworkBehaviour
 {
     [Header("Voice Chat Mode")]
     [SerializeField] private VoiceChatMode _voiceChatMode = VoiceChatMode.PushToTalk;
+
     [Header("Voice Level Monitor")]
     [SerializeField] private float _meterSensitivity = 4f;
 
@@ -27,26 +30,31 @@ public class VoiceNetworker : NetworkBehaviour
     private float _currentVoiceLevel;
     private float _peakVoiceLevel;
     private float _peakHoldTimer;
+
     private const float PeakHoldTime = 1.2f;
     private const float PeakDecayRate = 1.5f;
     private const float LevelSmoothUp = 25f;
     private const float LevelSmoothDown = 8f;
+
     public bool IsPlaybackOwnVoiceEnabled => _playbackOwnVoice;
     public VoiceChatMode CurrentVoiceChatMode => _voiceChatMode;
     public bool IsVoiceActive => _isActive;
     public float CurrentVoiceLevel => _currentVoiceLevel;
     public float PeakVoiceLevel => _peakVoiceLevel;
     public VoiceEmitter VoiceEmitter => _voiceEmitter;
+
     public float MeterSensitivity
     {
         get => _meterSensitivity;
         set => _meterSensitivity = Mathf.Clamp(value, 1f, 20f);
     }
+
     private void Awake()
     {
         _voiceRecorder = GetComponent<VoiceRecorder>();
         _voiceEmitter = GetComponent<VoiceEmitter>();
     }
+
     private void Start()
     {
         if (isLocalPlayer)
@@ -70,6 +78,7 @@ public class VoiceNetworker : NetworkBehaviour
         ChangeSavedMicDevice();
         ChangeSavedMicMode();
     }
+
     private void OnEnable()
     {
         if (SettingsManager.Instance == null)
@@ -77,10 +86,10 @@ public class VoiceNetworker : NetworkBehaviour
             Debug.LogWarning("SettingsManager not initialized!");
             return;
         }
-
         SettingsManager.Instance.OnMicrophoneModeChanged += ChangeSavedMicMode;
         SettingsManager.Instance.OnMicrophoneDeviceChanged += ChangeSavedMicDevice;
     }
+
     private void OnDisable()
     {
         if (SettingsManager.Instance == null)
@@ -88,44 +97,41 @@ public class VoiceNetworker : NetworkBehaviour
             Debug.LogWarning("SettingsManager not initialized!");
             return;
         }
-
         SettingsManager.Instance.OnMicrophoneModeChanged -= ChangeSavedMicMode;
         SettingsManager.Instance.OnMicrophoneDeviceChanged -= ChangeSavedMicDevice;
     }
+
     private void ChangeSavedMicMode()
     {
         SettingsManager settingsManager = SettingsManager.Instance;
-
-        if (settingsManager != null)
-        {
-            switch (settingsManager.MicrophoneMode)
-            {
-                case "PushToTalk":
-                    SetVoiceChatMode(VoiceChatMode.PushToTalk);
-                    break;
-                case "Toggle":
-                    SetVoiceChatMode(VoiceChatMode.Toggle);
-                    break;
-            }
-        }
-        else
+        if (settingsManager == null)
         {
             Debug.LogWarning("SettingsManager not initialized!");
+            return;
+        }
+
+        switch (settingsManager.MicrophoneMode)
+        {
+            case "PushToTalk":
+                SetVoiceChatMode(VoiceChatMode.PushToTalk);
+                break;
+            case "Toggle":
+                SetVoiceChatMode(VoiceChatMode.Toggle);
+                break;
         }
     }
+
     private void ChangeSavedMicDevice()
     {
         SettingsManager settingsManager = SettingsManager.Instance;
-
-        if (settingsManager != null)
-        {
-            SetVoiceChatDevice(settingsManager.MicrophoneDeviceIndex);
-        }
-        else
+        if (settingsManager == null)
         {
             Debug.LogWarning("SettingsManager not initialized!");
+            return;
         }
+        SetVoiceChatDevice(settingsManager.MicrophoneDeviceIndex);
     }
+
     private void Update()
     {
         if (!isLocalPlayer) return;
@@ -148,19 +154,20 @@ public class VoiceNetworker : NetworkBehaviour
                     StopRecording();
                 }
                 break;
+
             case VoiceChatMode.Toggle:
                 if (justPressed)
                 {
                     _isActive = !_isActive;
-                    if (_isActive)
-                        StartRecording();
-                    else
-                        StopRecording();
+                    if (_isActive) StartRecording();
+                    else StopRecording();
                 }
                 break;
         }
+
         _prevInput = firePressed;
     }
+
     public void SetVoiceChatDevice(int index)
     {
         if (_voiceRecorder.DriverIndex == index) return;
@@ -172,9 +179,9 @@ public class VoiceNetworker : NetworkBehaviour
         }
 
         _voiceRecorder.ChangeRecordingIndex(index);
-
         Debug.Log($"Microphone device index: {index}");
     }
+
     public void SetVoiceChatMode(VoiceChatMode newMode)
     {
         if (_voiceChatMode == newMode) return;
@@ -187,51 +194,58 @@ public class VoiceNetworker : NetworkBehaviour
 
         _voiceChatMode = newMode;
     }
+
     public void SetPlaybackOwnVoice(bool enabled)
     {
         if (!isLocalPlayer) return;
-
         _playbackOwnVoice = enabled;
         _voiceEmitter.enabled = enabled;
     }
+
     [Command]
     public void SendEncodedVoiceServerRpc(byte[] encodedVoiceData)
     {
         SendEncodedVoiceClientRpc(encodedVoiceData);
     }
+
     [ClientRpc]
     public void SendEncodedVoiceClientRpc(byte[] encodedVoiceData)
     {
-        if (!isLocalPlayer || _playbackOwnVoice)
+        if (isLocalPlayer && !_playbackOwnVoice) return;
+
+        if (_voiceDecoder == null)
         {
-            if (_voiceDecoder == null)
-            {
-                Debug.LogWarning("VoiceDecoder not initialized on this client.");
-                return;
-            }
-            Span<short> decodedVoiceSamples = _voiceDecoder.DecodeVoiceSamples(encodedVoiceData);
-            _voiceEmitter.EnqueueSamplesForPlayback(decodedVoiceSamples);
+            Debug.LogWarning("VoiceDecoder not initialized on this client.");
+            return;
         }
+
+        Span<short> decodedVoiceSamples = _voiceDecoder.DecodeVoiceSamples(encodedVoiceData);
+        _voiceEmitter.EnqueueSamplesForPlayback(decodedVoiceSamples);
     }
+
     public void StartRecording()
     {
         if (!isLocalPlayer) return;
         _voiceRecorder.StartRecording();
     }
+
     public void StopRecording()
     {
         if (!isLocalPlayer) return;
         _voiceRecorder.StopRecording();
     }
+
     public void SetOutputVolume(float volume)
     {
         _voiceEmitter.SetVolume(volume);
     }
+
     public void SetOcclusionValue(float value)
     {
         _voiceEmitter.SetOcclusion(value);
     }
-    void LateUpdate()
+
+    private void LateUpdate()
     {
         if (!isLocalPlayer) return;
 
@@ -245,6 +259,7 @@ public class VoiceNetworker : NetworkBehaviour
             hadVoiceThisFrame = true;
             SendEncodedVoiceServerRpc(encodedArray);
         }
+
         if (!_voiceRecorder.IsRecording && !_voiceEncoder.QueueIsEmpty)
         {
             Span<byte> encodedVoice = _voiceEncoder.GetEncodedVoice(true);
@@ -253,28 +268,30 @@ public class VoiceNetworker : NetworkBehaviour
             hadVoiceThisFrame = true;
             SendEncodedVoiceServerRpc(encodedArray);
         }
+
         if (!hadVoiceThisFrame)
         {
             DecayVoiceLevel();
         }
     }
+
     private void UpdateVoiceLevel(byte[] encodedData)
     {
         if (_monitorDecoder == null) return;
 
         Span<short> samples = _monitorDecoder.DecodeVoiceSamples(encodedData);
-
         if (samples.Length == 0) return;
 
         float sumSquares = 0f;
-
         for (int i = 0; i < samples.Length; i++)
         {
             float normalized = samples[i] / 32768f;
             sumSquares += normalized * normalized;
         }
+
         float rms = Mathf.Sqrt(sumSquares / samples.Length);
         float targetLevel = Mathf.Clamp01(rms * _meterSensitivity);
+
         float smoothSpeed = targetLevel > _currentVoiceLevel ? LevelSmoothUp : LevelSmoothDown;
         _currentVoiceLevel = Mathf.Lerp(_currentVoiceLevel, targetLevel, Time.deltaTime * smoothSpeed);
 
@@ -292,6 +309,7 @@ public class VoiceNetworker : NetworkBehaviour
             }
         }
     }
+
     private void DecayVoiceLevel()
     {
         _currentVoiceLevel = Mathf.Lerp(_currentVoiceLevel, 0f, Time.deltaTime * LevelSmoothDown);
@@ -303,7 +321,6 @@ public class VoiceNetworker : NetworkBehaviour
         }
 
         if (_currentVoiceLevel < 0.001f) _currentVoiceLevel = 0f;
-
         if (_peakVoiceLevel < 0.001f) _peakVoiceLevel = 0f;
     }
 }

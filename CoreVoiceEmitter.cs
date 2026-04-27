@@ -4,32 +4,24 @@ using UnityEngine;
 
 namespace ProximityChat
 {
-    /// <summary>
-    /// Plays 16-bit PCM voice audio as a 3D FMOD sound directly through FMOD's Core Engine.
-    /// </summary>
     public class CoreVoiceEmitter : VoiceEmitter
     {
-        // Sound parameters
         protected ChannelGroup _channelGroup;
-        // 3D audio
         protected Vector3 _prevPosition;
 
-        /// <inheritdoc />
         public override void Init(uint sampleRate = 48000, int channelCount = 1, VoiceFormat inputFormat = VoiceFormat.PCM16Samples)
         {
             base.Init(sampleRate, channelCount, inputFormat);
-            // Play the sound through FMOD's core engine, pausing it to start
             RuntimeManager.CoreSystem.playSound(_voiceSound, _channelGroup, true, out _channel);
         }
 
-        /// <inheritdoc />
         public override void SetVolume(float volume)
         {
             _channel.setVolume(volume);
         }
+
         public override void SetOcclusion(float value)
         {
-
         }
 
         protected override void SetPaused(bool isPaused)
@@ -40,9 +32,9 @@ namespace ProximityChat
         protected override void Update()
         {
             if (!_initialized) return;
+
             base.Update();
-            
-            // Set the 3D attributes for audio spatialization
+
             Vector3 position = transform.position;
             Vector3 velocity = (position - _prevPosition) / Time.deltaTime;
             ATTRIBUTES_3D attributes3D = RuntimeUtils.To3DAttributes(transform, velocity);
